@@ -325,7 +325,7 @@ void UserData::Remove( const char* filename )
 {
     const auto path = GetSavePath( m_program.c_str(), m_time, filename, false );
     if( !path ) return;
-    unlink( path );
+    _unlink( path );
 }
 
 const char* UserData::GetConfigLocation() const

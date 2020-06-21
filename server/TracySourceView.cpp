@@ -4,7 +4,8 @@
 
 #include <capstone/capstone.h>
 
-#include "../imgui/imgui.h"
+#include <imgui.h>
+
 #include "TracyCharUtil.hpp"
 #include "TracyColor.hpp"
 #include "TracyFilesystem.hpp"
@@ -19,7 +20,7 @@
 #include "IconsFontAwesome5.h"
 
 #ifndef TRACY_NO_FILESELECTOR
-#  include "../nfd/nfd.h"
+#  include <nfd.h>
 #endif
 
 namespace tracy
@@ -3538,7 +3539,7 @@ void SourceView::Save( const Worker& worker, size_t start, size_t stop )
     assert( start < stop );
 
     nfdchar_t* fn;
-    auto res = NFD_SaveDialog( "asm", nullptr, &fn, m_gwcb ? m_gwcb() : nullptr );
+    auto res = NFD_SaveDialog( "asm", nullptr, &fn);
     if( res == NFD_OKAY )
     {
         FILE* f = nullptr;

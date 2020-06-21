@@ -14,6 +14,10 @@
 #  include <sys/param.h>
 #endif
 
+#ifdef __clang__
+#include <cpuid.h>
+#endif
+
 #ifdef __CYGWIN__
 #  include <windows.h>
 #  include <unistd.h>
@@ -174,11 +178,14 @@ struct ThreadHandleWrapper
 static inline void CpuId( uint32_t* regs, uint32_t leaf )
 {
     memset(regs, 0, sizeof(uint32_t) * 4);
-#if defined _WIN32 || defined __CYGWIN__
+#  if defined (__clang__)
+    __cpuid(leaf, regs[0], regs[1], regs[2], regs[3]);
+#  elif defined _WIN32 || defined __CYGWIN__
     __cpuidex( (int*)regs, leaf, 0 );
-#else
-    __get_cpuid( leaf, regs, regs+1, regs+2, regs+3 );
-#endif
+#  else
+    int zero = 0;
+    asm volatile ( "cpuid" : "=a" (regs[0]), "=b" (regs[1]), "=c" (regs[2]), "=d" (regs[3]) : "a" (leaf), "c" (zero) );
+#  endif
 }
 
 static void InitFailure( const char* msg )

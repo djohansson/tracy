@@ -1,7 +1,7 @@
 #ifndef __TRACYMMAP_HPP__
 #define __TRACYMMAP_HPP__
 
-#if !defined _MSC_VER && !defined __MINGW32__ && !defined __CYGWIN__
+#if !(defined _MSC_VER || defined __MINGW32__ || defined __CYGWIN__ || (defined _WIN32 && __clang__))
 #  include <sys/mman.h>
 #else
 #  include <string.h>

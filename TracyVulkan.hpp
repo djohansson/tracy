@@ -77,11 +77,6 @@ public:
 
         vkBeginCommandBuffer( cmdbuf, &beginInfo );
         vkCmdResetQueryPool( cmdbuf, m_query, 0, m_queryCount );
-        vkEndCommandBuffer( cmdbuf );
-        vkQueueSubmit( queue, 1, &submitInfo, VK_NULL_HANDLE );
-        vkQueueWaitIdle( queue );
-
-        vkBeginCommandBuffer( cmdbuf, &beginInfo );
         vkCmdWriteTimestamp( cmdbuf, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_query, 0 );
         vkEndCommandBuffer( cmdbuf );
         vkQueueSubmit( queue, 1, &submitInfo, VK_NULL_HANDLE );
@@ -90,12 +85,6 @@ public:
         int64_t tcpu = Profiler::GetTime();
         int64_t tgpu;
         vkGetQueryPoolResults( device, m_query, 0, 1, sizeof( tgpu ), &tgpu, sizeof( tgpu ), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT );
-
-        vkBeginCommandBuffer( cmdbuf, &beginInfo );
-        vkCmdResetQueryPool( cmdbuf, m_query, 0, 1 );
-        vkEndCommandBuffer( cmdbuf );
-        vkQueueSubmit( queue, 1, &submitInfo, VK_NULL_HANDLE );
-        vkQueueWaitIdle( queue );
 
         auto item = Profiler::QueueSerial();
         MemWrite( &item->hdr.type, QueueType::GpuNewContext );

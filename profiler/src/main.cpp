@@ -4,8 +4,8 @@
 #include <chrono>
 #include <inttypes.h>
 #include <imgui.h>
-#include "imgui_impl_glfw.h"
-#include "imgui_impl_opengl3.h"
+#include <examples/imgui_impl_glfw.h>
+#include <examples/imgui_impl_opengl3.h>
 #include <mutex>
 #include <stdint.h>
 #include <stdio.h>
@@ -15,7 +15,7 @@
 #include <GL/gl3w.h>
 #include <GLFW/glfw3.h>
 #include <memory>
-#include "../nfd/nfd.h"
+#include <nfd.h>
 #include <sys/stat.h>
 #include <locale.h>
 
@@ -28,7 +28,7 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
-#include "stb_image.h"
+#include <stb_image.h>
 
 #include "../../common/TracyProtocol.hpp"
 #include "../../server/tracy_pdqsort.h"
@@ -43,7 +43,7 @@
 #include "../../server/TracyVersion.hpp"
 #include "../../server/IconsFontAwesome5.h"
 
-#include "imgui_freetype.h"
+#include <misc/freetype/imgui_freetype.h>
 #include "Arimo.hpp"
 #include "Cousine.hpp"
 #include "FontAwesomeSolid.hpp"
@@ -639,7 +639,7 @@ static void DrawContents()
         if( ImGui::Button( ICON_FA_FOLDER_OPEN " Open saved trace" ) && !loadThread.joinable() )
         {
             nfdchar_t* fn;
-            auto res = NFD_OpenDialog( "tracy", nullptr, &fn, GetMainWindowNative() );
+            auto res = NFD_OpenDialog( "tracy", nullptr, &fn);
             if( res == NFD_OKAY )
             {
                 try

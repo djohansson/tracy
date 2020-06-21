@@ -1,6 +1,6 @@
 #include "TracyMmap.hpp"
 
-#if defined _MSC_VER || defined __MINGW32__ || defined __CYGWIN__
+#if defined _MSC_VER || defined __MINGW32__ || defined __CYGWIN__ || (defined _WIN32 && __clang__)
 #  include <io.h>
 #  include <windows.h>
 

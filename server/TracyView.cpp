@@ -37,10 +37,10 @@
 #include "TracySourceView.hpp"
 #include "TracyView.hpp"
 
-#include "../imgui/imgui_internal.h"
+#include <imgui_internal.h>
 
 #ifndef TRACY_NO_FILESELECTOR
-#  include "../nfd/nfd.h"
+#  include <nfd.h>
 #endif
 
 #include "IconsFontAwesome5.h"
@@ -1122,7 +1122,7 @@ bool View::DrawConnection()
     {
 #ifndef TRACY_NO_FILESELECTOR
         nfdchar_t* fn;
-        auto res = NFD_SaveDialog( "tracy", nullptr, &fn, m_gwcb ? m_gwcb() : nullptr );
+        auto res = NFD_SaveDialog( "tracy", nullptr, &fn);
         if( res == NFD_OKAY )
 #else
         const char* fn = "trace.tracy";
@@ -10314,7 +10314,7 @@ void View::DrawCompare()
         if( ImGui::Button( ICON_FA_FOLDER_OPEN " Open second trace" ) && !m_compare.loadThread.joinable() )
         {
             nfdchar_t* fn;
-            auto res = NFD_OpenDialog( "tracy", nullptr, &fn, m_gwcb ? m_gwcb() : nullptr );
+            auto res = NFD_OpenDialog( "tracy", nullptr, &fn);
             if( res == NFD_OKAY )
             {
                 try
