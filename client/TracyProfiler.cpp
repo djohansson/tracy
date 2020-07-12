@@ -880,6 +880,17 @@ static Thread* s_sysTraceThread = nullptr;
 
 TRACY_API bool ProfilerAvailable() { return s_instance != nullptr; }
 
+TRACY_API int64_t GetFrequencyQpc()
+{
+#if defined _WIN32 || defined __CYGWIN__
+    LARGE_INTEGER t;
+    QueryPerformanceFrequency( &t );
+    return t.QuadPart;
+#else
+    return 0;
+#endif
+}
+
 #ifdef TRACY_DELAYED_INIT
 struct ThreadNameData;
 TRACY_API moodycamel::ConcurrentQueue<QueueItem>& GetQueue();
@@ -2243,16 +2254,17 @@ void Profiler::SendSourceLocationPayload( uint64_t _ptr )
     MemWrite( &item.hdr.type, QueueType::SourceLocationPayload );
     MemWrite( &item.stringTransfer.ptr, _ptr );
 
-    const auto len = *((uint32_t*)ptr);
-    assert( len <= std::numeric_limits<uint16_t>::max() );
-    assert( len > 4 );
-    const auto l16 = uint16_t( len - 4 );
+    uint16_t len;
+    memcpy( &len, ptr, sizeof( len ) );
+    assert( len > 2 );
+    len -= 2;
+    ptr += 2;
 
-    NeedDataSize( QueueDataSize[(int)QueueType::SourceLocationPayload] + sizeof( l16 ) + l16 );
+    NeedDataSize( QueueDataSize[(int)QueueType::SourceLocationPayload] + sizeof( len ) + len );
 
     AppendDataUnsafe( &item, QueueDataSize[(int)QueueType::SourceLocationPayload] );
-    AppendDataUnsafe( &l16, sizeof( l16 ) );
-    AppendDataUnsafe( ptr + 4, l16 );
+    AppendDataUnsafe( &len, sizeof( len ) );
+    AppendDataUnsafe( ptr, len );
 }
 
 void Profiler::SendCallstackPayload( uint64_t _ptr )
@@ -2313,15 +2325,15 @@ void Profiler::SendCallstackAlloc( uint64_t _ptr )
     MemWrite( &item.hdr.type, QueueType::CallstackAllocPayload );
     MemWrite( &item.stringTransfer.ptr, _ptr );
 
-    const auto len = *((uint32_t*)ptr);
-    assert( len <= std::numeric_limits<uint16_t>::max() );
-    const auto l16 = uint16_t( len );
+    uint16_t len;
+    memcpy( &len, ptr, 2 );
+    ptr += 2;
 
-    NeedDataSize( QueueDataSize[(int)QueueType::CallstackAllocPayload] + sizeof( l16 ) + l16 );
+    NeedDataSize( QueueDataSize[(int)QueueType::CallstackAllocPayload] + sizeof( len ) + len );
 
     AppendDataUnsafe( &item, QueueDataSize[(int)QueueType::CallstackAllocPayload] );
-    AppendDataUnsafe( &l16, sizeof( l16 ) );
-    AppendDataUnsafe( ptr + 4, l16 );
+    AppendDataUnsafe( &len, sizeof( len ) );
+    AppendDataUnsafe( ptr, len );
 }
 
 void Profiler::SendCallstackFrame( uint64_t ptr )

@@ -691,6 +691,10 @@ bool View::DrawImpl()
             ImGui::BeginTooltip();
             ImGui::Text( "Time span" );
             ImGui::EndTooltip();
+            if( ImGui::IsItemClicked( 2 ) )
+            {
+                ZoomToRange( 0, m_worker.GetLastTime() );
+            }
         }
         ImGui::SameLine();
         dx = ImGui::GetCursorPosX() - cx;
@@ -2172,6 +2176,13 @@ bool View::DrawZoneFrames( const FrameData& frames )
 
         if( fsz - 7 <= tx )
         {
+            static char tmp[256];
+            sprintf( tmp, "%i (%s)", i, TimeToString( ftime ) );
+            buf = tmp;
+            tx = ImGui::CalcTextSize( buf ).x;
+        }
+        if( fsz - 7 <= tx )
+        {
             buf = TimeToString( ftime );
             tx = ImGui::CalcTextSize( buf ).x;
         }
@@ -2595,16 +2606,9 @@ void View::DrawZones()
                         }
                     }
                     TextFocused( "Zone count:", RealToString( v->count ) );
-                    //TextFocused( "Top-level zones:", RealToString( v->timeline.size() ) );
                     if( isMultithreaded )
                     {
                         TextFocused( "Timestamp accuracy:", TimeToString( v->period ) );
-                    }
-                    else
-                    {
-                        TextDisabledUnformatted( "Query accuracy bits:" );
-                        ImGui::SameLine();
-                        ImGui::Text( "%i", v->accuracyBits );
                     }
                     ImGui::EndTooltip();
                 }
@@ -6512,26 +6516,55 @@ void View::DrawZoneInfoWindow()
             ImGui::SameLine();
             ImGui::TextDisabled( "(%s)", m_worker.GetString( srcloc.name ) );
         }
+        ImGui::SameLine();
+        if( ClipboardButton( 1 ) )
+        {
+            if( srcloc.name.active )
+            {
+                char tmp[1024];
+                sprintf( tmp, "%s (%s)", m_worker.GetString( m_worker.GetZoneExtra( ev ).name ), m_worker.GetString( srcloc.name ) );
+                ImGui::SetClipboardText( tmp );
+            }
+            else
+            {
+                ImGui::SetClipboardText( m_worker.GetString( m_worker.GetZoneExtra( ev ).name ) );
+            }
+        }
         TextFocused( "Function:", m_worker.GetString( srcloc.function ) );
+        ImGui::SameLine();
+        if( ClipboardButton( 2 ) ) ImGui::SetClipboardText( m_worker.GetString( srcloc.function ) );
     }
     else if( srcloc.name.active )
     {
         if( m_bigFont ) ImGui::PushFont( m_bigFont );
         TextFocused( "Zone name:", m_worker.GetString( srcloc.name ) );
         if( m_bigFont ) ImGui::PopFont();
+        ImGui::SameLine();
+        if( ClipboardButton( 1 ) ) ImGui::SetClipboardText( m_worker.GetString( srcloc.name ) );
         TextFocused( "Function:", m_worker.GetString( srcloc.function ) );
+        ImGui::SameLine();
+        if( ClipboardButton( 2 ) ) ImGui::SetClipboardText( m_worker.GetString( srcloc.function ) );
     }
     else
     {
         if( m_bigFont ) ImGui::PushFont( m_bigFont );
         TextFocused( "Function:", m_worker.GetString( srcloc.function ) );
         if( m_bigFont ) ImGui::PopFont();
+        ImGui::SameLine();
+        if( ClipboardButton( 1 ) ) ImGui::SetClipboardText( m_worker.GetString( srcloc.function ) );
     }
     SmallColorBox( GetSrcLocColor( m_worker.GetSourceLocation( ev.SrcLoc() ), 0 ) );
     ImGui::SameLine();
     TextDisabledUnformatted( "Location:" );
     ImGui::SameLine();
     ImGui::Text( "%s:%i", m_worker.GetString( srcloc.file ), srcloc.line );
+    ImGui::SameLine();
+    if( ClipboardButton( 3 ) )
+    {
+        char tmp[1024];
+        sprintf( tmp, "%s:%i", m_worker.GetString( srcloc.file ), srcloc.line );
+        ImGui::SetClipboardText( tmp );
+    }
     SmallColorBox( GetThreadColor( tid, 0 ) );
     ImGui::SameLine();
     TextFocused( "Thread:", m_worker.GetThreadName( tid ) );
@@ -7463,12 +7496,23 @@ void View::DrawGpuInfoWindow()
     if( m_bigFont ) ImGui::PushFont( m_bigFont );
     TextFocused( "Zone name:", m_worker.GetString( srcloc.name ) );
     if( m_bigFont ) ImGui::PopFont();
+    ImGui::SameLine();
+    if( ClipboardButton( 1 ) ) ImGui::SetClipboardText( m_worker.GetString( srcloc.name ) );
     TextFocused( "Function:", m_worker.GetString( srcloc.function ) );
+    ImGui::SameLine();
+    if( ClipboardButton( 2 ) ) ImGui::SetClipboardText( m_worker.GetString( srcloc.function ) );
     SmallColorBox( GetRawZoneColor( ev ) );
     ImGui::SameLine();
     TextDisabledUnformatted( "Location:" );
     ImGui::SameLine();
     ImGui::Text( "%s:%i", m_worker.GetString( srcloc.file ), srcloc.line );
+    ImGui::SameLine();
+    if( ClipboardButton( 3 ) )
+    {
+        char tmp[1024];
+        sprintf( tmp, "%s:%i", m_worker.GetString( srcloc.file ), srcloc.line );
+        ImGui::SetClipboardText( tmp );
+    }
     SmallColorBox( GetThreadColor( tid, 0 ) );
     ImGui::SameLine();
     TextFocused( "Thread:", m_worker.GetThreadName( tid ) );
@@ -7873,80 +7917,83 @@ void View::DrawOptions()
                 {
                     ImGui::TextDisabled( "%s threads", RealToString( gpuData[i]->threadData.size() ) );
                 }
-                ImGui::TreePush();
-                auto& drift = GpuDrift( gpuData[i] );
-                ImGui::SetNextItemWidth( 120 );
-                ImGui::PushID( i );
-                ImGui::InputInt( "Drift (ns/s)", &drift );
-                ImGui::PopID();
-                if( timeline.size() > 1 )
+                if( !gpuData[i]->hasCalibration )
                 {
-                    ImGui::SameLine();
-                    if( ImGui::Button( ICON_FA_ROBOT " Auto" ) )
+                    ImGui::TreePush();
+                    auto& drift = GpuDrift( gpuData[i] );
+                    ImGui::SetNextItemWidth( 120 );
+                    ImGui::PushID( i );
+                    ImGui::InputInt( "Drift (ns/s)", &drift );
+                    ImGui::PopID();
+                    if( timeline.size() > 1 )
                     {
-                        size_t lastidx = 0;
-                        if( timeline.is_magic() )
+                        ImGui::SameLine();
+                        if( ImGui::Button( ICON_FA_ROBOT " Auto" ) )
                         {
-                            auto& tl = *((Vector<GpuEvent>*)&timeline);
-                            for( size_t j=tl.size()-1; j > 0; j-- )
+                            size_t lastidx = 0;
+                            if( timeline.is_magic() )
                             {
-                                if( tl[j].GpuEnd() >= 0 )
+                                auto& tl = *((Vector<GpuEvent>*)&timeline);
+                                for( size_t j=tl.size()-1; j > 0; j-- )
                                 {
-                                    lastidx = j;
-                                    break;
+                                    if( tl[j].GpuEnd() >= 0 )
+                                    {
+                                        lastidx = j;
+                                        break;
+                                    }
                                 }
                             }
-                        }
-                        else
-                        {
-                            for( size_t j=timeline.size()-1; j > 0; j-- )
+                            else
                             {
-                                if( timeline[j]->GpuEnd() >= 0 )
+                                for( size_t j=timeline.size()-1; j > 0; j-- )
                                 {
-                                    lastidx = j;
-                                    break;
+                                    if( timeline[j]->GpuEnd() >= 0 )
+                                    {
+                                        lastidx = j;
+                                        break;
+                                    }
                                 }
                             }
-                        }
 
-                        enum { NumSlopes = 10000 };
-                        std::random_device rd;
-                        std::default_random_engine gen( rd() );
-                        std::uniform_int_distribution<size_t> dist( 0, lastidx - 1 );
-                        float slopes[NumSlopes];
-                        size_t idx = 0;
-                        if( timeline.is_magic() )
-                        {
-                            auto& tl = *((Vector<GpuEvent>*)&timeline);
-                            do
+                            enum { NumSlopes = 10000 };
+                            std::random_device rd;
+                            std::default_random_engine gen( rd() );
+                            std::uniform_int_distribution<size_t> dist( 0, lastidx - 1 );
+                            float slopes[NumSlopes];
+                            size_t idx = 0;
+                            if( timeline.is_magic() )
                             {
-                                const auto p0 = dist( gen );
-                                const auto p1 = dist( gen );
-                                if( p0 != p1 )
+                                auto& tl = *((Vector<GpuEvent>*)&timeline);
+                                do
                                 {
-                                    slopes[idx++] = float( 1.0 - double( tl[p1].GpuStart() - tl[p0].GpuStart() ) / double( tl[p1].CpuStart() - tl[p0].CpuStart() ) );
+                                    const auto p0 = dist( gen );
+                                    const auto p1 = dist( gen );
+                                    if( p0 != p1 )
+                                    {
+                                        slopes[idx++] = float( 1.0 - double( tl[p1].GpuStart() - tl[p0].GpuStart() ) / double( tl[p1].CpuStart() - tl[p0].CpuStart() ) );
+                                    }
                                 }
+                                while( idx < NumSlopes );
                             }
-                            while( idx < NumSlopes );
-                        }
-                        else
-                        {
-                            do
+                            else
                             {
-                                const auto p0 = dist( gen );
-                                const auto p1 = dist( gen );
-                                if( p0 != p1 )
+                                do
                                 {
-                                    slopes[idx++] = float( 1.0 - double( timeline[p1]->GpuStart() - timeline[p0]->GpuStart() ) / double( timeline[p1]->CpuStart() - timeline[p0]->CpuStart() ) );
+                                    const auto p0 = dist( gen );
+                                    const auto p1 = dist( gen );
+                                    if( p0 != p1 )
+                                    {
+                                        slopes[idx++] = float( 1.0 - double( timeline[p1]->GpuStart() - timeline[p0]->GpuStart() ) / double( timeline[p1]->CpuStart() - timeline[p0]->CpuStart() ) );
+                                    }
                                 }
+                                while( idx < NumSlopes );
                             }
-                            while( idx < NumSlopes );
+                            std::sort( slopes, slopes+NumSlopes );
+                            drift = int( 1000000000 * -slopes[NumSlopes/2] );
                         }
-                        std::sort( slopes, slopes+NumSlopes );
-                        drift = int( 1000000000 * -slopes[NumSlopes/2] );
                     }
+                    ImGui::TreePop();
                 }
-                ImGui::TreePop();
             }
             ImGui::TreePop();
         }
@@ -8689,6 +8736,13 @@ uint64_t View::GetSelectionTarget( const Worker::ZoneThreadData& ev, FindZone::G
         if( !m_worker.HasZoneExtra( zone ) ) return std::numeric_limits<uint64_t>::max();
         const auto& extra = m_worker.GetZoneExtra( zone );
         return extra.text.Active() ? extra.text.Idx() : std::numeric_limits<uint64_t>::max();
+    }
+    case FindZone::GroupBy::ZoneName:
+    {
+        const auto& zone = *ev.Zone();
+        if( !m_worker.HasZoneExtra( zone ) ) return std::numeric_limits<uint64_t>::max();
+        const auto& extra = m_worker.GetZoneExtra( zone );
+        return extra.name.Active() ? extra.name.Idx() : std::numeric_limits<uint64_t>::max();
     }
     case FindZone::GroupBy::Callstack:
         return m_worker.GetZoneExtra( *ev.Zone() ).callstack.Val();
@@ -9835,6 +9889,8 @@ void View::DrawFindZone()
         ImGui::SameLine();
         groupChanged |= ImGui::RadioButton( "User text", (int*)( &m_findZone.groupBy ), (int)FindZone::GroupBy::UserText );
         ImGui::SameLine();
+        groupChanged |= ImGui::RadioButton( "Zone name", (int*)( &m_findZone.groupBy ), (int)FindZone::GroupBy::ZoneName );
+        ImGui::SameLine();
         groupChanged |= ImGui::RadioButton( "Call stacks", (int*)( &m_findZone.groupBy ), (int)FindZone::GroupBy::Callstack );
         ImGui::SameLine();
         groupChanged |= ImGui::RadioButton( "Parent", (int*)( &m_findZone.groupBy ), (int)FindZone::GroupBy::Parent );
@@ -9922,6 +9978,20 @@ void View::DrawFindZone()
                 {
                     const auto& extra = m_worker.GetZoneExtra( zone );
                     gid = extra.text.Active() ? extra.text.Idx() : std::numeric_limits<uint64_t>::max();
+                }
+                break;
+            }
+            case FindZone::GroupBy::ZoneName:
+            {
+                const auto& zone = *ev.Zone();
+                if( !m_worker.HasZoneExtra( zone ) )
+                {
+                    gid = std::numeric_limits<uint64_t>::max();
+                }
+                else
+                {
+                    const auto& extra = m_worker.GetZoneExtra( zone );
+                    gid = extra.name.Active() ? extra.name.Idx() : std::numeric_limits<uint64_t>::max();
                 }
                 break;
             }
@@ -10109,6 +10179,17 @@ void View::DrawFindZone()
                     }
                 case FindZone::GroupBy::UserText:
                     hdrString = v->first == std::numeric_limits<uint64_t>::max() ? "No user text" : m_worker.GetString( StringIdx( v->first ) );
+                    break;
+                case FindZone::GroupBy::ZoneName:
+                    if( v->first == std::numeric_limits<uint64_t>::max() )
+                    {
+                        auto& srcloc = m_worker.GetSourceLocation( m_findZone.match[m_findZone.selMatch] );
+                        hdrString = m_worker.GetString( srcloc.name.active ? srcloc.name : srcloc.function );
+                    }
+                    else
+                    {
+                        hdrString = m_worker.GetString( StringIdx( v->first ) );
+                    }
                     break;
                 case FindZone::GroupBy::Callstack:
                     if( v->first == 0 )
