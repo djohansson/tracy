@@ -616,6 +616,7 @@ bool View::DrawImpl()
         {
             ImGui::PopStyleColor();
         }
+        if( ImGui::IsItemClicked() ) ImGui::OpenPopup( "GoToFramePopup" );
     }
     ImGui::SameLine();
     if( ImGui::SmallButton( " " ICON_FA_CARET_RIGHT " " ) ) ZoomToNextFrame();
@@ -638,14 +639,6 @@ bool View::DrawImpl()
             ImGui::TextDisabled( "(%s)", RealToString( fd->frames.size() ) );
         }
         ImGui::EndCombo();
-    }
-    ImGui::SameLine();
-    if( ImGui::Button( ICON_FA_CROSSHAIRS ) ) ImGui::OpenPopup( "GoToFramePopup" );
-    if( ImGui::IsItemHovered() )
-    {
-        ImGui::BeginTooltip();
-        ImGui::TextUnformatted( "Go to frame" );
-        ImGui::EndTooltip();
     }
     if( ImGui::BeginPopup( "GoToFramePopup" ) )
     {
@@ -2177,7 +2170,7 @@ bool View::DrawZoneFrames( const FrameData& frames )
         if( fsz - 7 <= tx )
         {
             static char tmp[256];
-            sprintf( tmp, "%i (%s)", i, TimeToString( ftime ) );
+            sprintf( tmp, "%s (%s)", RealToString( i ), TimeToString( ftime ) );
             buf = tmp;
             tx = ImGui::CalcTextSize( buf ).x;
         }
@@ -8534,11 +8527,14 @@ void View::DrawMessages()
     size_t tsz = 0;
     for( const auto& t : m_threadOrder ) if( !t->messages.empty() ) tsz++;
 
-    m_messageFilter.Draw( ICON_FA_FILTER " Filter messages", 200 );
+    const bool msgsChanged = msgs.size() != m_prevMessages;
+    if( msgsChanged ) m_prevMessages = msgs.size();
+    bool filterChanged = m_messageFilter.Draw( ICON_FA_FILTER " Filter messages", 200 );
     ImGui::SameLine();
     if( ImGui::Button( ICON_FA_BACKSPACE " Clear" ) )
     {
         m_messageFilter.Clear();
+        filterChanged = true;
     }
     ImGui::SameLine();
     ImGui::Spacing();
@@ -8556,6 +8552,7 @@ void View::DrawMessages()
         ImGui::Checkbox( ICON_FA_IMAGE " Show frame images", &m_showMessageImages );
     }
 
+    bool threadsChanged = false;
     auto expand = ImGui::TreeNode( ICON_FA_RANDOM " Visible threads:" );
     ImGui::SameLine();
     ImGui::TextDisabled( "(%zu)", tsz );
@@ -8570,6 +8567,7 @@ void View::DrawMessages()
             {
                 VisibleMsgThread( t->id ) = true;
             }
+            threadsChanged = true;
         }
         ImGui::SameLine();
         if( ImGui::SmallButton( "Unselect all" ) )
@@ -8578,6 +8576,7 @@ void View::DrawMessages()
             {
                 VisibleMsgThread( t->id ) = false;
             }
+            threadsChanged = true;
         }
 
         int idx = 0;
@@ -8588,7 +8587,10 @@ void View::DrawMessages()
             const auto threadColor = GetThreadColor( t->id, 0 );
             SmallColorBox( threadColor );
             ImGui::SameLine();
-            SmallCheckbox( m_worker.GetThreadName( t->id ), &VisibleMsgThread( t->id ) );
+            if( SmallCheckbox( m_worker.GetThreadName( t->id ), &VisibleMsgThread( t->id ) ) )
+            {
+                threadsChanged = true;
+            }
             ImGui::PopID();
             ImGui::SameLine();
             ImGui::TextDisabled( "(%s)", RealToString( t->messages.size() ) );
@@ -8599,6 +8601,41 @@ void View::DrawMessages()
             }
         }
         ImGui::TreePop();
+    }
+
+    if( msgsChanged || filterChanged || threadsChanged )
+    {
+        m_msgList.reserve( msgs.size() );
+        m_msgList.clear();
+        if( m_messageFilter.IsActive() )
+        {
+            for( size_t i=0; i<msgs.size(); i++ )
+            {
+                const auto& v = msgs[i];
+                const auto tid = m_worker.DecompressThread( v->thread );
+                if( VisibleMsgThread( tid ) )
+                {
+                    const auto text = m_worker.GetString( msgs[i]->ref );
+                    if( m_messageFilter.PassFilter( text ) )
+                    {
+                        m_msgList.push_back_no_space_check( uint32_t( i ) );
+                    }
+                }
+            }
+        }
+        else
+        {
+            for( size_t i=0; i<msgs.size(); i++ )
+            {
+                const auto& v = msgs[i];
+                const auto tid = m_worker.DecompressThread( v->thread );
+                if( VisibleMsgThread( tid ) )
+                {
+                    m_msgList.push_back_no_space_check( uint32_t( i ) );
+                }
+            }
+        }
+        m_visibleMessages = m_msgList.size();
     }
 
     bool hasCallstack = m_worker.GetCallstackFrameCount() != 0;
@@ -8634,85 +8671,25 @@ void View::DrawMessages()
     }
     ImGui::Separator();
 
-    int msgcnt = 0;
-    const auto filterActive = m_messageFilter.IsActive();
     int idx = 0;
-    for( const auto& v : msgs )
+    if( m_msgToFocus )
     {
-        const auto tid = m_worker.DecompressThread( v->thread );
-        if( VisibleMsgThread( tid ) )
+        for( const auto& msgIdx : m_msgList )
         {
-            const auto text = m_worker.GetString( v->ref );
-            if( !filterActive || m_messageFilter.PassFilter( text ) )
+            DrawMessageLine( *msgs[msgIdx], hasCallstack, idx );
+        }
+    }
+    else
+    {
+        ImGuiListClipper clipper( m_msgList.size() );
+        while( clipper.Step() )
+        {
+            for( auto i=clipper.DisplayStart; i<clipper.DisplayEnd; i++ )
             {
-                ImGui::PushID( v );
-                if( ImGui::Selectable( TimeToStringExact( v->time ), m_msgHighlight == v, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowItemOverlap ) )
-                {
-                    CenterAtTime( v->time );
-                }
-                if( ImGui::IsItemHovered() )
-                {
-                    m_msgHighlight = v;
-
-                    if( m_showMessageImages )
-                    {
-                        const auto frameIdx = m_worker.GetFrameRange( *m_frames, v->time, v->time ).first;
-                        auto fi = m_worker.GetFrameImage( *m_frames, frameIdx );
-                        if( fi )
-                        {
-                            ImGui::BeginTooltip();
-                            if( fi != m_frameTexturePtr )
-                            {
-                                if( !m_frameTexture ) m_frameTexture = MakeTexture();
-                                UpdateTexture( m_frameTexture, m_worker.UnpackFrameImage( *fi ), fi->w, fi->h );
-                                m_frameTexturePtr = fi;
-                            }
-                            if( fi->flip )
-                            {
-                                ImGui::Image( m_frameTexture, ImVec2( fi->w, fi->h ), ImVec2( 0, 1 ), ImVec2( 1, 0 ) );
-                            }
-                            else
-                            {
-                                ImGui::Image( m_frameTexture, ImVec2( fi->w, fi->h ) );
-                            }
-                            ImGui::EndTooltip();
-                        }
-                    }
-                }
-                if( m_msgToFocus == v )
-                {
-                    ImGui::SetScrollHereY();
-                    m_msgToFocus.Decay( nullptr );
-                    m_messagesScrollBottom = false;
-                }
-                ImGui::PopID();
-                ImGui::NextColumn();
-                SmallColorBox( GetThreadColor( tid, 0 ) );
-                ImGui::SameLine();
-                ImGui::TextUnformatted( m_worker.GetThreadName( tid ) );
-                ImGui::SameLine();
-                ImGui::TextDisabled( "(%s)", RealToString( tid ) );
-                ImGui::NextColumn();
-                ImGui::PushStyleColor( ImGuiCol_Text, v->color );
-                ImGui::TextWrapped( "%s", text );
-                ImGui::PopStyleColor();
-                ImGui::NextColumn();
-                if( hasCallstack )
-                {
-                    const auto cs = v->callstack.Val();
-                    if( cs != 0 )
-                    {
-                        SmallCallstackButton( ICON_FA_ALIGN_JUSTIFY, cs, idx );
-                        ImGui::SameLine();
-                        DrawCallstackCalls( cs, 4 );
-                    }
-                    ImGui::NextColumn();
-                }
-                msgcnt++;
+                DrawMessageLine( *msgs[m_msgList[i]], hasCallstack, idx );
             }
         }
     }
-    m_visibleMessages = msgcnt;
 
     if( m_worker.IsConnected() && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() )
     {
@@ -8722,6 +8699,84 @@ void View::DrawMessages()
     ImGui::EndColumns();
     ImGui::EndChild();
     ImGui::End();
+}
+
+void View::DrawMessageLine( const MessageData& msg, bool hasCallstack, int& idx )
+{
+    const auto text = m_worker.GetString( msg.ref );
+    const auto tid = m_worker.DecompressThread( msg.thread );
+    ImGui::PushID( &msg );
+    if( ImGui::Selectable( TimeToStringExact( msg.time ), m_msgHighlight == &msg, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowItemOverlap ) )
+    {
+        CenterAtTime( msg.time );
+    }
+    if( ImGui::IsItemHovered() )
+    {
+        m_msgHighlight = &msg;
+
+        if( m_showMessageImages )
+        {
+            const auto frameIdx = m_worker.GetFrameRange( *m_frames, msg.time, msg.time ).first;
+            auto fi = m_worker.GetFrameImage( *m_frames, frameIdx );
+            if( fi )
+            {
+                ImGui::BeginTooltip();
+                if( fi != m_frameTexturePtr )
+                {
+                    if( !m_frameTexture ) m_frameTexture = MakeTexture();
+                    UpdateTexture( m_frameTexture, m_worker.UnpackFrameImage( *fi ), fi->w, fi->h );
+                    m_frameTexturePtr = fi;
+                }
+                if( fi->flip )
+                {
+                    ImGui::Image( m_frameTexture, ImVec2( fi->w, fi->h ), ImVec2( 0, 1 ), ImVec2( 1, 0 ) );
+                }
+                else
+                {
+                    ImGui::Image( m_frameTexture, ImVec2( fi->w, fi->h ) );
+                }
+                ImGui::EndTooltip();
+            }
+        }
+    }
+    if( m_msgToFocus == &msg )
+    {
+        ImGui::SetScrollHereY();
+        m_msgToFocus.Decay( nullptr );
+        m_messagesScrollBottom = false;
+    }
+    ImGui::PopID();
+    ImGui::NextColumn();
+    SmallColorBox( GetThreadColor( tid, 0 ) );
+    ImGui::SameLine();
+    ImGui::TextUnformatted( m_worker.GetThreadName( tid ) );
+    ImGui::SameLine();
+    ImGui::TextDisabled( "(%s)", RealToString( tid ) );
+    ImGui::NextColumn();
+    ImGui::PushStyleColor( ImGuiCol_Text, msg.color );
+    const auto cw = ImGui::GetContentRegionAvail().x;
+    const auto tw = ImGui::CalcTextSize( text ).x;
+    ImGui::TextUnformatted( text );
+    if( tw > cw && ImGui::IsItemHovered() )
+    {
+        ImGui::SetNextWindowSize( ImVec2( 1000, 0 ) );
+        ImGui::BeginTooltip();
+        ImGui::TextWrapped( "%s", text );
+        ImGui::EndTooltip();
+    }
+    ImGui::PopStyleColor();
+    ImGui::NextColumn();
+    if( hasCallstack )
+    {
+        const auto cs = msg.callstack.Val();
+        if( cs != 0 )
+        {
+            SmallCallstackButton( ICON_FA_ALIGN_JUSTIFY, cs, idx );
+            ImGui::SameLine();
+            DrawCallstackCalls( cs, 4 );
+        }
+        ImGui::NextColumn();
+    }
 }
 
 uint64_t View::GetSelectionTarget( const Worker::ZoneThreadData& ev, FindZone::GroupBy groupBy ) const
