@@ -101,7 +101,7 @@ extern "C" typedef BOOL (WINAPI *t_GetLogicalProcessorInformationEx)( LOGICAL_PR
 #  include <sys/utsname.h>
 #endif
 
-#if !defined _WIN32 && !defined __CYGWIN__ && ( defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64 )
+#if __clang__ || (!defined _WIN32 && !defined __CYGWIN__ && ( defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64 ))
 #  include <cpuid.h>
 #endif
 
