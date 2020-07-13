@@ -15,6 +15,7 @@
 
 #ifdef _MSC_VER
 #  define stat64 _stat64
+#  define fileno _fileno
 #endif
 #ifdef __CYGWIN__
 #  define stat64 stat
@@ -340,7 +341,7 @@ private:
             throw FileReadError();
         }
 
-        m_data = (char*)mmap( nullptr, m_dataSize, PROT_READ, MAP_SHARED, _fileno( f ), 0 );
+        m_data = (char*)mmap( nullptr, m_dataSize, PROT_READ, MAP_SHARED, fileno( f ), 0 );
         fclose( f );
         if( !m_data )
         {

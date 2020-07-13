@@ -14,10 +14,6 @@
 #  include <sys/param.h>
 #endif
 
-#ifdef __clang__
-#include <cpuid.h>
-#endif
-
 #ifdef __CYGWIN__
 #  include <windows.h>
 #  include <unistd.h>

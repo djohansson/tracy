@@ -7,6 +7,10 @@
 #  include <unistd.h>
 #endif
 
+#ifdef _MSC_VER
+#  define unlink _unlink
+#endif
+
 #include "TracyStorage.hpp"
 #include "TracyUserData.hpp"
 #include "TracyViewData.hpp"
@@ -325,7 +329,7 @@ void UserData::Remove( const char* filename )
 {
     const auto path = GetSavePath( m_program.c_str(), m_time, filename, false );
     if( !path ) return;
-    _unlink( path );
+    unlink( path );
 }
 
 const char* UserData::GetConfigLocation() const
