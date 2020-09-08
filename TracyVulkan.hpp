@@ -354,6 +354,13 @@ public:
         GetProfiler().SendCallstack( depth );
     }
 
+    tracy_force_inline VkCtxScope(const VkCtxScope&) = delete;
+    tracy_force_inline VkCtxScope(VkCtxScope&& other)
+        : m_active(std::exchange(other.m_active, {}))
+        , m_cmdbuf(std::exchange(other.m_cmdbuf, {}))
+        , m_ctx(std::exchange(other.m_ctx, {}))
+    { }
+
     tracy_force_inline ~VkCtxScope()
     {
         if( !m_active ) return;
@@ -370,11 +377,20 @@ public:
         Profiler::QueueSerialFinish();
     }
 
-private:
-    const bool m_active;
+    VkCtxScope operator=(const VkCtxScope&) = delete;
+    VkCtxScope& operator=(VkCtxScope&& other)
+    {
+        m_active = std::exchange(other.m_active, {});
+        m_cmdbuf = std::exchange(other.m_cmdbuf, {});
+        m_ctx = std::exchange(other.m_ctx, {});
+        return *this;
+    }
 
-    VkCommandBuffer m_cmdbuf;
-    VkCtx* m_ctx;
+private:
+    bool m_active = false;
+
+    VkCommandBuffer m_cmdbuf = {};
+    VkCtx* m_ctx = nullptr;
 };
 
 static inline VkCtx* CreateVkContext( VkPhysicalDevice physdev, VkDevice device, VkQueue queue, VkCommandBuffer cmdbuf, PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsEXT gpdctd, PFN_vkGetCalibratedTimestampsEXT gct )
