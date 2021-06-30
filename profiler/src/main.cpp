@@ -284,7 +284,7 @@ int main( int argc, char** argv )
     bigFont = io.Fonts->AddFontFromMemoryCompressedTTF( tracy::Arimo_compressed_data, tracy::Cousine_compressed_size, 20.0f * dpiScale );
     smallFont = io.Fonts->AddFontFromMemoryCompressedTTF( tracy::Arimo_compressed_data, tracy::Cousine_compressed_size, 10.0f * dpiScale );
 
-    ImGuiFreeType::BuildFontAtlas( io.Fonts, ImGuiFreeType::LightHinting );
+    ImGuiFreeType::BuildFontAtlas( io.Fonts, ImGuiFreeTypeBuilderFlags_LightHinting );
 
     ImGui::StyleColorsDark();
     auto& style = ImGui::GetStyle();
