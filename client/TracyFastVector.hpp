@@ -98,11 +98,11 @@ public:
 private:
     tracy_no_inline void AllocMore()
     {
-        const auto cap = ( m_end - m_ptr ) * 2;
-        const auto size = m_write - m_ptr;
+        const auto cap = size_t( m_end - m_ptr ) * 2;
+        const auto size = size_t( m_write - m_ptr );
         T* ptr = (T*)tracy_malloc( sizeof( T ) * cap );
         memcpy( ptr, m_ptr, size * sizeof( T ) );
-        tracy_free( m_ptr );
+        tracy_free_fast( m_ptr );
         m_ptr = ptr;
         m_write = m_ptr + size;
         m_end = m_ptr + cap;

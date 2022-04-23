@@ -22,11 +22,12 @@
 namespace tracy
 {
 
-struct SymbolData
+struct CallstackSymbolData
 {
     const char* file;
     uint32_t line;
     bool needFree;
+    uint64_t symAddr;
 };
 
 struct CallstackEntry
@@ -45,20 +46,28 @@ struct CallstackEntryData
     const char* imageName;
 };
 
-SymbolData DecodeSymbolAddress( uint64_t ptr );
-SymbolData DecodeCodeAddress( uint64_t ptr );
+CallstackSymbolData DecodeSymbolAddress( uint64_t ptr );
+CallstackSymbolData DecodeCodeAddress( uint64_t ptr );
 const char* DecodeCallstackPtrFast( uint64_t ptr );
 CallstackEntryData DecodeCallstackPtr( uint64_t ptr );
 void InitCallstack();
+const char* GetKernelModulePath( uint64_t addr );
 
 #if TRACY_HAS_CALLSTACK == 1
 
-TRACY_API uintptr_t* CallTrace( int depth );
+extern "C"
+{
+    typedef unsigned long (__stdcall *___tracy_t_RtlWalkFrameChain)( void**, unsigned long, unsigned long );
+    TRACY_API extern ___tracy_t_RtlWalkFrameChain ___tracy_RtlWalkFrameChain;
+}
 
 static tracy_force_inline void* Callstack( int depth )
 {
     assert( depth >= 1 && depth < 63 );
-    return CallTrace( depth );
+    auto trace = (uintptr_t*)tracy_malloc( ( 1 + depth ) * sizeof( uintptr_t ) );
+    const auto num = ___tracy_RtlWalkFrameChain( (void**)( trace + 1 ), depth, 0 );
+    *trace = num;
+    return trace;
 }
 
 #elif TRACY_HAS_CALLSTACK == 2 || TRACY_HAS_CALLSTACK == 5
@@ -100,8 +109,8 @@ static tracy_force_inline void* Callstack( int depth )
 {
     assert( depth >= 1 );
 
-    auto trace = (uintptr_t*)tracy_malloc( ( 1 + depth ) * sizeof( uintptr_t ) );
-    const auto num = backtrace( (void**)(trace+1), depth );
+    auto trace = (uintptr_t*)tracy_malloc( ( 1 + (size_t)depth ) * sizeof( uintptr_t ) );
+    const auto num = (size_t)backtrace( (void**)(trace+1), depth );
     *trace = num;
 
     return trace;

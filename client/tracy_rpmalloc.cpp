@@ -130,7 +130,9 @@
 #  include <stdio.h>
 #  include <stdlib.h>
 #  if defined(__APPLE__)
-#    include <mach/mach_vm.h>
+#    if !TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
+#      include <mach/mach_vm.h>
+#    endif
 #    include <mach/vm_statistics.h>
 #    include <pthread.h>
 #  endif
@@ -1372,7 +1374,7 @@ _memory_allocate_heap(void) {
 		heap = (heap_t*)_memory_map((1 + (sizeof(heap_t) >> _memory_page_size_shift)) * _memory_page_size, &align_offset);
 		if (!heap)
 			return heap;
-		memset(heap, 0, sizeof(heap_t));
+		memset((char*)heap, 0, sizeof(heap_t));
 		heap->align_offset = align_offset;
 
 		//Get a new heap ID
@@ -1636,11 +1638,14 @@ _memory_adjust_size_class(size_t iclass) {
 	}
 }
 
+extern thread_local bool RpThreadShutdown;
+
 static void
 _memory_heap_finalize(void* heapptr) {
 	heap_t* heap = (heap_t*)heapptr;
 	if (!heap)
 		return;
+	RpThreadShutdown = true;
 	//Release thread cache spans back to global cache
 #if ENABLE_THREAD_CACHE
 	_memory_heap_cache_adopt_deferred(heap);
@@ -1709,7 +1714,7 @@ rp_thread_destructor(void* value) {
 #include <errno.h>
 
 //! Initialize the allocator and setup global data
-extern inline int
+TRACY_API int
 rpmalloc_initialize(void) {
 	if (_rpmalloc_initialized) {
 		rpmalloc_thread_initialize();
@@ -1910,7 +1915,7 @@ rpmalloc_initialize_config(const rpmalloc_config_t* config) {
 }
 
 //! Finalize the allocator
-void
+TRACY_API void
 rpmalloc_finalize(void) {
 	atomic_thread_fence_acquire();
 
@@ -1998,7 +2003,7 @@ rpmalloc_finalize(void) {
 }
 
 //! Initialize thread, assign heap
-extern inline void
+TRACY_API void
 rpmalloc_thread_initialize(void) {
 	if (!get_thread_heap_raw()) {
 		heap_t* heap = _memory_allocate_heap();
@@ -2016,7 +2021,7 @@ rpmalloc_thread_initialize(void) {
 }
 
 //! Finalize thread, orphan heap
-void
+TRACY_API void
 rpmalloc_thread_finalize(void) {
 	heap_t* heap = get_thread_heap_raw();
 	if (heap)
@@ -2166,7 +2171,7 @@ rpcalloc(size_t num, size_t size) {
 	return block;
 }
 
-extern inline RPMALLOC_ALLOCATOR void*
+TRACY_API RPMALLOC_ALLOCATOR void*
 rprealloc(void* ptr, size_t size) {
 #if ENABLE_VALIDATE_ARGS
 	if (size >= MAX_ALLOC_SIZE) {

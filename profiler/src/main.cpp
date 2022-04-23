@@ -15,15 +15,15 @@
 #include <GL/gl3w.h>
 #include <GLFW/glfw3.h>
 #include <memory>
-#include <nfd.h>
 #include <sys/stat.h>
 #include <locale.h>
 
+#ifndef TRACY_NO_FILESELECTOR
+#  include <nfd.h>
+#endif
+
 #ifdef _WIN32
 #  include <windows.h>
-#  include <shellapi.h>
-#  define GLFW_EXPOSE_NATIVE_WIN32
-#  include <GLFW/glfw3native.h>
 #endif
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -34,48 +34,41 @@
 #include "../../server/tracy_pdqsort.h"
 #include "../../server/tracy_robin_hood.h"
 #include "../../server/TracyBadVersion.hpp"
+#include "../../server/TracyFileHeader.hpp"
 #include "../../server/TracyFileRead.hpp"
 #include "../../server/TracyImGui.hpp"
+#include "../../server/TracyMouse.hpp"
 #include "../../server/TracyPrint.hpp"
 #include "../../server/TracyStorage.hpp"
+#include "../../server/TracyVersion.hpp"
 #include "../../server/TracyView.hpp"
+#include "../../server/TracyWeb.hpp"
 #include "../../server/TracyWorker.hpp"
 #include "../../server/TracyVersion.hpp"
 #include "../../server/IconsFontAwesome5.h"
 
 #include <misc/freetype/imgui_freetype.h>
-#include "Arimo.hpp"
-#include "Cousine.hpp"
+#include "DroidSans.hpp"
+#include "FiraCodeRetina.hpp"
 #include "FontAwesomeSolid.hpp"
 #include "icon.hpp"
 #include "ResolvService.hpp"
+#include "NativeWindow.hpp"
+#include "HttpRequest.hpp"
 
 static void glfw_error_callback(int error, const char* description)
 {
     fprintf(stderr, "Error %d: %s\n", error, description);
 }
 
-static void OpenWebpage( const char* url )
-{
-#ifdef _WIN32
-    ShellExecuteA( nullptr, nullptr, url, nullptr, nullptr, 0 );
-#elif defined __APPLE__
-    char buf[1024];
-    sprintf( buf, "open %s", url );
-    system( buf );
-#else
-    char buf[1024];
-    sprintf( buf, "xdg-open %s", url );
-    system( buf );
-#endif
-}
-
-static GLFWwindow* s_glfwWindow = nullptr;
+GLFWwindow* s_glfwWindow = nullptr;
 static bool s_customTitle = false;
 static void SetWindowTitleCallback( const char* title )
 {
     assert( s_glfwWindow );
-    glfwSetWindowTitle( s_glfwWindow, title );
+    char tmp[1024];
+    sprintf( tmp, "%s - Tracy Profiler %i.%i.%i", title, tracy::Version::Major, tracy::Version::Minor, tracy::Version::Patch );
+    glfwSetWindowTitle( s_glfwWindow, tmp );
     s_customTitle = true;
 }
 
@@ -83,15 +76,6 @@ static void DrawContents();
 static void WindowRefreshCallback( GLFWwindow* window )
 {
     DrawContents();
-}
-
-void* GetMainWindowNative()
-{
-#ifdef _WIN32
-    return (void*)glfwGetWin32Window( s_glfwWindow );
-#else
-    return nullptr;
-#endif
 }
 
 std::vector<std::unordered_map<std::string, uint64_t>::const_iterator> RebuildConnectionHistory( const std::unordered_map<std::string, uint64_t>& connHistMap )
@@ -110,8 +94,8 @@ struct ClientData
 {
     int64_t time;
     uint32_t protocolVersion;
-    uint32_t activeTime;
-    uint32_t port;
+    int32_t activeTime;
+    uint16_t port;
     std::string procName;
     std::string address;
 };
@@ -121,10 +105,10 @@ enum class ViewShutdown { False, True, Join };
 static tracy::unordered_flat_map<uint64_t, ClientData> clients;
 static std::unique_ptr<tracy::View> view;
 static tracy::BadVersionState badVer;
-static int port = 8086;
+static uint16_t port = 8086;
 static const char* connectTo = nullptr;
 static char title[128];
-static std::thread loadThread;
+static std::thread loadThread, updateThread, updateNotesThread;
 static std::unique_ptr<tracy::UdpListen> broadcastListen;
 static std::mutex resolvLock;
 static tracy::unordered_flat_map<std::string, std::string> resolvMap;
@@ -139,6 +123,83 @@ static std::atomic<ViewShutdown> viewShutdown { ViewShutdown::False };
 static double animTime = 0;
 static float dpiScale = 1.f;
 static ImGuiTextFilter addrFilter, portFilter, progFilter;
+static std::thread::id mainThread;
+static std::vector<std::function<void()>> mainThreadTasks;
+static std::mutex mainThreadLock;
+static uint32_t updateVersion = 0;
+static bool showReleaseNotes = false;
+static std::string releaseNotes;
+
+void RunOnMainThread( std::function<void()> cb, bool forceDelay = false )
+{
+    if( !forceDelay && std::this_thread::get_id() == mainThread )
+    {
+        cb();
+    }
+    else
+    {
+        std::lock_guard<std::mutex> lock( mainThreadLock );
+        mainThreadTasks.emplace_back( cb );
+    }
+}
+
+static void LoadFonts( float scale, ImFont*& cb_fixedWidth, ImFont*& cb_bigFont, ImFont*& cb_smallFont )
+{
+    static const ImWchar rangesBasic[] = {
+        0x0020, 0x00FF, // Basic Latin + Latin Supplement
+        0x03BC, 0x03BC, // micro
+        0x03C3, 0x03C3, // small sigma
+        0x2013, 0x2013, // en dash
+        0x2264, 0x2264, // less-than or equal to
+        0,
+    };
+    static const ImWchar rangesIcons[] = {
+        ICON_MIN_FA, ICON_MAX_FA,
+        0
+    };
+
+    ImGuiIO& io = ImGui::GetIO();
+
+    ImFontConfig configBasic;
+    configBasic.FontBuilderFlags = ImGuiFreeTypeBuilderFlags_LightHinting;
+    ImFontConfig configMerge;
+    configMerge.MergeMode = true;
+    configMerge.FontBuilderFlags = ImGuiFreeTypeBuilderFlags_LightHinting;
+
+    io.Fonts->Clear();
+    io.Fonts->AddFontFromMemoryCompressedTTF( tracy::DroidSans_compressed_data, tracy::DroidSans_compressed_size, round( 15.0f * scale ), &configBasic, rangesBasic );
+    io.Fonts->AddFontFromMemoryCompressedTTF( tracy::FontAwesomeSolid_compressed_data, tracy::FontAwesomeSolid_compressed_size, round( 14.0f * scale ), &configMerge, rangesIcons );
+    fixedWidth = cb_fixedWidth = io.Fonts->AddFontFromMemoryCompressedTTF( tracy::FiraCodeRetina_compressed_data, tracy::FiraCodeRetina_compressed_size, round( 15.0f * scale ), &configBasic );
+    //fixedWidth->ExtraLineHeight = round( -5.f * scale );
+    bigFont = cb_bigFont = io.Fonts->AddFontFromMemoryCompressedTTF( tracy::DroidSans_compressed_data, tracy::DroidSans_compressed_size, round( 21.0f * scale ), &configBasic );
+    io.Fonts->AddFontFromMemoryCompressedTTF( tracy::FontAwesomeSolid_compressed_data, tracy::FontAwesomeSolid_compressed_size, round( 20.0f * scale ), &configMerge, rangesIcons );
+    smallFont = cb_smallFont = io.Fonts->AddFontFromMemoryCompressedTTF( tracy::DroidSans_compressed_data, tracy::DroidSans_compressed_size, round( 10.0f * scale ), &configBasic );
+
+    ImGui_ImplOpenGL3_DestroyFontsTexture();
+    ImGui_ImplOpenGL3_CreateFontsTexture();
+}
+
+static void SetupDPIScale( float scale, ImFont*& cb_fixedWidth, ImFont*& cb_bigFont, ImFont*& cb_smallFont )
+{
+    LoadFonts( scale, cb_fixedWidth, cb_bigFont, cb_smallFont );
+
+    auto& style = ImGui::GetStyle();
+    style = ImGuiStyle();
+    ImGui::StyleColorsDark();
+    style.WindowBorderSize = 1.f * scale;
+    style.FrameBorderSize = 1.f * scale;
+    style.FrameRounding = 5.f;
+    style.Colors[ImGuiCol_ScrollbarBg] = ImVec4( 1, 1, 1, 0.03f );
+    style.Colors[ImGuiCol_Header] = ImVec4(0.26f, 0.59f, 0.98f, 0.25f);
+    style.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.26f, 0.59f, 0.98f, 0.35f);
+    style.Colors[ImGuiCol_HeaderActive] = ImVec4(0.26f, 0.59f, 0.98f, 0.45f);
+    style.ScaleAllSizes( scale );
+}
+
+static void SetupScaleCallback( float scale, ImFont*& cb_fixedWidth, ImFont*& cb_bigFont, ImFont*& cb_smallFont )
+{
+    RunOnMainThread( [scale, &cb_fixedWidth, &cb_bigFont, &cb_smallFont] { SetupDPIScale( scale * dpiScale, cb_fixedWidth, cb_bigFont, cb_smallFont ); }, true );
+}
 
 int main( int argc, char** argv )
 {
@@ -212,10 +273,28 @@ int main( int argc, char** argv )
         }
     }
 
+    mainThread = std::this_thread::get_id();
+
+    updateThread = std::thread( [] {
+        HttpRequest( "nereid.pl", "/tracy/version", 8099, [] ( int size, char* data ) {
+            if( size == 4 )
+            {
+                uint32_t ver;
+                memcpy( &ver, data, 4 );
+                RunOnMainThread( [ver] { updateVersion = ver; } );
+            }
+            delete[] data;
+        } );
+    } );
+
     // Setup window
     glfwSetErrorCallback(glfw_error_callback);
     if( !glfwInit() ) return 1;
+#ifdef DISPLAY_SERVER_WAYLAND
+    glfwWindowHint(GLFW_ALPHA_BITS, 0);
+#else
     glfwWindowHint(GLFW_VISIBLE, 0);
+#endif
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
@@ -239,18 +318,33 @@ int main( int argc, char** argv )
     s_glfwWindow = window;
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1); // Enable vsync
-    gl3wInit();
     glfwSetWindowRefreshCallback( window, WindowRefreshCallback );
 
 #ifdef _WIN32
     typedef UINT(*GDFS)(void);
     GDFS getDpiForSystem = nullptr;
     HMODULE dll = GetModuleHandleW(L"user32.dll");
-    if (dll != INVALID_HANDLE_VALUE)
-        getDpiForSystem = (GDFS)GetProcAddress(dll, "GetDpiForSystem");
-    if (getDpiForSystem)
-        dpiScale = getDpiForSystem() / 96.f;
+    if( dll != INVALID_HANDLE_VALUE ) getDpiForSystem = (GDFS)GetProcAddress(dll, "GetDpiForSystem");
+    if( getDpiForSystem ) dpiScale = getDpiForSystem() / 96.f;
+#elif defined __linux__
+#  if GLFW_VERSION_MAJOR > 3 || ( GLFW_VERSION_MAJOR == 3 && GLFW_VERSION_MINOR >= 3 )
+    auto monitor = glfwGetWindowMonitor( window );
+    if( !monitor ) monitor = glfwGetPrimaryMonitor();
+    if( monitor )
+    {
+        float x, y;
+        glfwGetMonitorContentScale( monitor, &x, &y );
+        dpiScale = x;
+    }
+#  endif
 #endif
+
+    const auto envDpiScale = getenv( "TRACY_DPI_SCALE" );
+    if( envDpiScale )
+    {
+        const auto cnv = atof( envDpiScale );
+        if( cnv != 0 ) dpiScale = cnv;
+    }
 
     // Setup ImGui binding
     IMGUI_CHECKVERSION();
@@ -260,49 +354,19 @@ int main( int argc, char** argv )
     io.IniFilename = iniFileName.c_str();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
 
+	gl3wInit();
+
     ImGui_ImplGlfw_InitForOpenGL( window, true );
     ImGui_ImplOpenGL3_Init( "#version 150" );
 
-    static const ImWchar rangesBasic[] = {
-        0x0020, 0x00FF, // Basic Latin + Latin Supplement
-        0x03BC, 0x03BC, // micro
-        0x03C3, 0x03C3, // small sigma
-        0x2013, 0x2013, // en dash
-        0x2264, 0x2264, // less-than or equal to
-        0,
-    };
-    static const ImWchar rangesIcons[] = {
-        ICON_MIN_FA, ICON_MAX_FA,
-        0
-    };
-    ImFontConfig configMerge;
-    configMerge.MergeMode = true;
-
-    io.Fonts->AddFontFromMemoryCompressedTTF( tracy::Arimo_compressed_data, tracy::Arimo_compressed_size, 15.0f * dpiScale, nullptr, rangesBasic );
-    io.Fonts->AddFontFromMemoryCompressedTTF( tracy::FontAwesomeSolid_compressed_data, tracy::FontAwesomeSolid_compressed_size, 14.0f * dpiScale, &configMerge, rangesIcons );
-    fixedWidth = io.Fonts->AddFontFromMemoryCompressedTTF( tracy::Cousine_compressed_data, tracy::Cousine_compressed_size, 14.0f * dpiScale );
-    bigFont = io.Fonts->AddFontFromMemoryCompressedTTF( tracy::Arimo_compressed_data, tracy::Cousine_compressed_size, 20.0f * dpiScale );
-    smallFont = io.Fonts->AddFontFromMemoryCompressedTTF( tracy::Arimo_compressed_data, tracy::Cousine_compressed_size, 10.0f * dpiScale );
-
-    ImGuiFreeType::BuildFontAtlas( io.Fonts, ImGuiFreeTypeBuilderFlags_LightHinting );
-
-    ImGui::StyleColorsDark();
-    auto& style = ImGui::GetStyle();
-    style.WindowBorderSize = 1.f * dpiScale;
-    style.FrameBorderSize = 1.f * dpiScale;
-    style.FrameRounding = 5.f;
-    style.Colors[ImGuiCol_ScrollbarBg] = ImVec4( 1, 1, 1, 0.03f );
-    style.Colors[ImGuiCol_Header] = ImVec4(0.26f, 0.59f, 0.98f, 0.25f);
-    style.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.26f, 0.59f, 0.98f, 0.35f);
-    style.Colors[ImGuiCol_HeaderActive] = ImVec4(0.26f, 0.59f, 0.98f, 0.45f);
-    style.ScaleAllSizes( dpiScale );
+    SetupDPIScale( dpiScale, fixedWidth, bigFont, smallFont );
 
     if( argc == 2 )
     {
         auto f = std::unique_ptr<tracy::FileRead>( tracy::FileRead::Open( argv[1] ) );
         if( f )
         {
-            view = std::make_unique<tracy::View>( *f, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
+            view = std::make_unique<tracy::View>( RunOnMainThread, *f, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative, SetupScaleCallback );
         }
     }
     else
@@ -315,7 +379,7 @@ int main( int argc, char** argv )
             }
             else if( strcmp( argv[1], "-p" ) == 0 )
             {
-                port = atoi( argv[2] );
+                port = (uint16_t)atoi( argv[2] );
             }
             else
             {
@@ -328,8 +392,12 @@ int main( int argc, char** argv )
     }
     if( connectTo )
     {
-        view = std::make_unique<tracy::View>( connectTo, port, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
+        view = std::make_unique<tracy::View>( RunOnMainThread, connectTo, port, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative, SetupScaleCallback );
     }
+
+// #ifndef TRACY_NO_FILESELECTOR
+//     NFD_Init();
+// #endif
 
     glfwShowWindow( window );
 
@@ -347,7 +415,20 @@ int main( int argc, char** argv )
         {
             std::this_thread::sleep_for( std::chrono::milliseconds( 50 ) );
         }
+        std::unique_lock<std::mutex> lock( mainThreadLock );
+        if( !mainThreadTasks.empty() )
+        {
+            std::vector<std::function<void()>> tmp;
+            std::swap( tmp, mainThreadTasks );
+            lock.unlock();
+            for( auto& cb : tmp ) cb();
+        }
     }
+
+    if( loadThread.joinable() ) loadThread.join();
+    if( updateThread.joinable() ) updateThread.join();
+    if( updateNotesThread.joinable() ) updateNotesThread.join();
+    view.reset();
 
     {
         FILE* f = fopen( winPosFile.c_str(), "wb" );
@@ -375,6 +456,11 @@ int main( int argc, char** argv )
     ImGui::DestroyContext();
 
     glfwDestroyWindow(window);
+
+// #ifndef TRACY_NO_FILESELECTOR
+//     NFD_Quit();
+// #endif
+
     glfwTerminate();
 
     {
@@ -420,7 +506,7 @@ static void DrawContents()
 {
     static bool reconnect = false;
     static std::string reconnectAddr;
-    static int reconnectPort;
+    static uint16_t reconnectPort;
     static bool showFilter = false;
 
     const ImVec4 clear_color = ImColor( 114, 144, 154 );
@@ -431,6 +517,9 @@ static void DrawContents()
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    tracy::MouseFrame();
+
+    setlocale( LC_NUMERIC, "C" );
 
     if( !view )
     {
@@ -453,10 +542,11 @@ static void DrawContents()
         {
             tracy::IpAddress addr;
             size_t len;
-            auto msg = broadcastListen->Read( len, addr );
-            if( msg )
+            for(;;)
             {
-                assert( len <= sizeof( tracy::BroadcastMessage ) );
+                auto msg = broadcastListen->Read( len, addr, 0 );
+                if( !msg ) break;
+                if( len > sizeof( tracy::BroadcastMessage ) ) continue;
                 tracy::BroadcastMessage bm;
                 memcpy( &bm, msg, len );
 
@@ -471,30 +561,37 @@ static void DrawContents()
                     const auto ipNumerical = addr.GetNumber();
                     const auto clientId = uint64_t( ipNumerical ) | ( uint64_t( listenPort ) << 32 );
                     auto it = clients.find( clientId );
-                    if( it == clients.end() )
+                    if( activeTime >= 0 )
                     {
-                        std::string ip( address );
-                        resolvLock.lock();
-                        if( resolvMap.find( ip ) == resolvMap.end() )
+                        if( it == clients.end() )
                         {
-                            resolvMap.emplace( ip, ip );
-                            resolv.Query( ipNumerical, [ip] ( std::string&& name ) {
-                                std::lock_guard<std::mutex> lock( resolvLock );
-                                auto it = resolvMap.find( ip );
-                                assert( it != resolvMap.end() );
-                                std::swap( it->second, name );
-                                } );
+                            std::string ip( address );
+                            resolvLock.lock();
+                            if( resolvMap.find( ip ) == resolvMap.end() )
+                            {
+                                resolvMap.emplace( ip, ip );
+                                resolv.Query( ipNumerical, [ip] ( std::string&& name ) {
+                                    std::lock_guard<std::mutex> lock( resolvLock );
+                                    auto it = resolvMap.find( ip );
+                                    assert( it != resolvMap.end() );
+                                    std::swap( it->second, name );
+                                    } );
+                            }
+                            resolvLock.unlock();
+                            clients.emplace( clientId, ClientData { time, protoVer, activeTime, listenPort, procname, std::move( ip ) } );
                         }
-                        resolvLock.unlock();
-                        clients.emplace( clientId, ClientData { time, protoVer, activeTime, listenPort, procname, std::move( ip ) } );
+                        else
+                        {
+                            it->second.time = time;
+                            it->second.activeTime = activeTime;
+                            it->second.port = listenPort;
+                            if( it->second.protocolVersion != protoVer ) it->second.protocolVersion = protoVer;
+                            if( strcmp( it->second.procName.c_str(), procname ) != 0 ) it->second.procName = procname;
+                        }
                     }
-                    else
+                    else if( it != clients.end() )
                     {
-                        it->second.time = time;
-                        it->second.activeTime = activeTime;
-                        it->second.port = listenPort;
-                        if( it->second.protocolVersion != protoVer ) it->second.protocolVersion = protoVer;
-                        if( strcmp( it->second.procName.c_str(), procname ) != 0 ) it->second.procName = procname;
+                        clients.erase( it );
                     }
                 }
             }
@@ -513,19 +610,42 @@ static void DrawContents()
             }
         }
 
-        setlocale( LC_NUMERIC, "C" );
         auto& style = ImGui::GetStyle();
         style.Colors[ImGuiCol_WindowBg] = ImVec4( 0.129f, 0.137f, 0.11f, 1.f );
-        ImGui::Begin( "Get started", nullptr, ImGuiWindowFlags_AlwaysAutoResize );
+        ImGui::Begin( "Get started", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse );
         char buf[128];
         sprintf( buf, "Tracy Profiler %i.%i.%i", tracy::Version::Major, tracy::Version::Minor, tracy::Version::Patch );
         ImGui::PushFont( bigFont );
         tracy::TextCentered( buf );
         ImGui::PopFont();
+        ImGui::SameLine( ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize( ICON_FA_WRENCH ).x - ImGui::GetStyle().FramePadding.x * 2 );
+        if( ImGui::Button( ICON_FA_WRENCH ) )
+        {
+            ImGui::OpenPopup( "About Tracy" );
+        }
+        bool keepOpenAbout = true;
+        if( ImGui::BeginPopupModal( "About Tracy", &keepOpenAbout, ImGuiWindowFlags_AlwaysAutoResize ) )
+        {
+            ImGui::PushFont( bigFont );
+            tracy::TextCentered( buf );
+            ImGui::PopFont();
+            ImGui::Spacing();
+            ImGui::TextUnformatted( "A real time, nanosecond resolution, remote telemetry, hybrid\nframe and sampling profiler for games and other applications." );
+            ImGui::Spacing();
+            ImGui::TextUnformatted( "Created by Bartosz Taudul" );
+            ImGui::SameLine();
+            tracy::TextDisabledUnformatted( "<wolf@nereid.pl>" );
+            tracy::TextDisabledUnformatted( "Additional authors listed in AUTHORS file and in git history." );
+            ImGui::Separator();
+            tracy::TextFocused( "Protocol version", tracy::RealToString( tracy::ProtocolVersion ) );
+            tracy::TextFocused( "Broadcast version", tracy::RealToString( tracy::BroadcastVersion ) );
+            tracy::TextFocused( "Build date", __DATE__ ", " __TIME__ );
+            ImGui::EndPopup();
+        }
         ImGui::Spacing();
         if( ImGui::Button( ICON_FA_BOOK " Manual" ) )
         {
-            OpenWebpage( "https://github.com/wolfpld/tracy/releases" );
+            tracy::OpenWebpage( "https://github.com/wolfpld/tracy/releases" );
         }
         ImGui::SameLine();
         if( ImGui::Button( ICON_FA_GLOBE_AMERICAS " Web" ) )
@@ -536,44 +656,68 @@ static void DrawContents()
         {
             if( ImGui::Selectable( ICON_FA_HOME " Tracy Profiler home page" ) )
             {
-                OpenWebpage( "https://github.com/wolfpld/tracy" );
+                tracy::OpenWebpage( "https://github.com/wolfpld/tracy" );
             }
             ImGui::Separator();
-            if( ImGui::Selectable( ICON_FA_VIDEO " Overview of v0.2" ) )
+            if( ImGui::Selectable( ICON_FA_VIDEO " New features in v0.8" ) )
             {
-                OpenWebpage( "https://www.youtube.com/watch?v=fB5B46lbapc" );
-            }
-            if( ImGui::Selectable( ICON_FA_VIDEO " New features in v0.3" ) )
-            {
-                OpenWebpage( "https://www.youtube.com/watch?v=3SXpDpDh2Uo" );
-            }
-            if( ImGui::Selectable( ICON_FA_VIDEO " New features in v0.4" ) )
-            {
-                OpenWebpage( "https://www.youtube.com/watch?v=eAkgkaO8B9o" );
-            }
-            if( ImGui::Selectable( ICON_FA_VIDEO " New features in v0.5" ) )
-            {
-                OpenWebpage( "https://www.youtube.com/watch?v=P6E7qLMmzTQ" );
-            }
-            if( ImGui::Selectable( ICON_FA_VIDEO " New features in v0.6" ) )
-            {
-                OpenWebpage( "https://www.youtube.com/watch?v=uJkrFgriuOo" );
+                tracy::OpenWebpage( "https://www.youtube.com/watch?v=30wpRpHTTag" );
             }
             if( ImGui::Selectable( ICON_FA_VIDEO " New features in v0.7" ) )
             {
-                OpenWebpage( "https://www.youtube.com/watch?v=_hU7vw00MZ4" );
+                tracy::OpenWebpage( "https://www.youtube.com/watch?v=_hU7vw00MZ4" );
+            }
+            if( ImGui::Selectable( ICON_FA_VIDEO " New features in v0.6" ) )
+            {
+                tracy::OpenWebpage( "https://www.youtube.com/watch?v=uJkrFgriuOo" );
+            }
+            if( ImGui::Selectable( ICON_FA_VIDEO " New features in v0.5" ) )
+            {
+                tracy::OpenWebpage( "https://www.youtube.com/watch?v=P6E7qLMmzTQ" );
+            }
+            if( ImGui::Selectable( ICON_FA_VIDEO " New features in v0.4" ) )
+            {
+                tracy::OpenWebpage( "https://www.youtube.com/watch?v=eAkgkaO8B9o" );
+            }
+            if( ImGui::Selectable( ICON_FA_VIDEO " New features in v0.3" ) )
+            {
+                tracy::OpenWebpage( "https://www.youtube.com/watch?v=3SXpDpDh2Uo" );
+            }
+            if( ImGui::Selectable( ICON_FA_VIDEO " Overview of v0.2" ) )
+            {
+                tracy::OpenWebpage( "https://www.youtube.com/watch?v=fB5B46lbapc" );
             }
             ImGui::EndPopup();
         }
         ImGui::SameLine();
         if( ImGui::Button( ICON_FA_COMMENT " Chat" ) )
         {
-            OpenWebpage( "https://discord.gg/pk78auc" );
+            tracy::OpenWebpage( "https://discord.gg/pk78auc" );
         }
         ImGui::SameLine();
         if( ImGui::Button( ICON_FA_HEART " Sponsor" ) )
         {
-            OpenWebpage( "https://github.com/sponsors/wolfpld/" );
+            tracy::OpenWebpage( "https://github.com/sponsors/wolfpld/" );
+        }
+        if( updateVersion != 0 && updateVersion > tracy::FileVersion( tracy::Version::Major, tracy::Version::Minor, tracy::Version::Patch ) )
+        {
+            ImGui::Separator();
+            ImGui::TextColored( ImVec4( 1, 1, 0, 1 ), ICON_FA_EXCLAMATION " Update to %i.%i.%i is available!", ( updateVersion >> 16 ) & 0xFF, ( updateVersion >> 8 ) & 0xFF, updateVersion & 0xFF );
+            ImGui::SameLine();
+            if( ImGui::SmallButton( ICON_FA_GIFT " Get it!" ) )
+            {
+                showReleaseNotes = true;
+                if( !updateNotesThread.joinable() )
+                {
+                    updateNotesThread = std::thread( [] {
+                        HttpRequest( "nereid.pl", "/tracy/notes", 8099, [] ( int size, char* data ) {
+                            std::string notes( data, data+size );
+                            delete[] data;
+                            RunOnMainThread( [notes = move( notes )] { releaseNotes = std::move( notes ); } );
+                        } );
+                    } );
+                }
+            }
         }
         ImGui::Separator();
         ImGui::TextUnformatted( "Client address" );
@@ -627,19 +771,24 @@ static void DrawContents()
             if( *ptr == ':' )
             {
                 std::string addrPart = std::string( addr, ptr );
-                uint32_t portPart = atoi( ptr+1 );
-                view = std::make_unique<tracy::View>( addrPart.c_str(), portPart, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
+                uint16_t portPart = (uint16_t)atoi( ptr+1 );
+                view = std::make_unique<tracy::View>( RunOnMainThread, addrPart.c_str(), portPart, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative, SetupScaleCallback );
             }
             else
             {
-                view = std::make_unique<tracy::View>( addr, port, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
+                view = std::make_unique<tracy::View>( RunOnMainThread, addr, port, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative, SetupScaleCallback );
             }
         }
-        ImGui::SameLine( 0, ImGui::GetFontSize() * 2 );
+        ImGui::SameLine( 0, ImGui::GetTextLineHeight() * 2 );
+
+#ifndef TRACY_NO_FILESELECTOR
         if( ImGui::Button( ICON_FA_FOLDER_OPEN " Open saved trace" ) && !loadThread.joinable() )
         {
             nfdchar_t* fn;
             auto res = NFD_OpenDialog( "tracy", nullptr, &fn);
+            // nfdu8filteritem_t filter = { "Tracy Profiler trace file", "tracy" };
+            // nfdu8char_t* fn;
+            // auto res = NFD_OpenDialogU8( &fn, &filter, 1, nullptr );
             if( res == NFD_OKAY )
             {
                 try
@@ -650,7 +799,7 @@ static void DrawContents()
                         loadThread = std::thread( [f] {
                             try
                             {
-                                view = std::make_unique<tracy::View>( *f, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
+                                view = std::make_unique<tracy::View>( RunOnMainThread, *f, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative, SetupScaleCallback );
                             }
                             catch( const tracy::UnsupportedVersion& e )
                             {
@@ -673,14 +822,16 @@ static void DrawContents()
                 {
                     badVer.state = tracy::BadVersionState::ReadError;
                 }
+                //NFD_FreePathU8( fn );
             }
         }
 
         if( badVer.state != tracy::BadVersionState::Ok )
         {
             if( loadThread.joinable() ) { loadThread.join(); }
-            tracy::BadVersion( badVer );
+            tracy::BadVersion( badVer, bigFont );
         }
+#endif
 
         if( !clients.empty() )
         {
@@ -692,12 +843,7 @@ static void DrawContents()
             {
                 ImGui::SameLine();
                 tracy::TextColoredUnformatted( 0xFF00FFFF, ICON_FA_EXCLAMATION_TRIANGLE );
-                if( ImGui::IsItemHovered() )
-                {
-                    ImGui::BeginTooltip();
-                    ImGui::TextUnformatted( "Filters are active" );
-                    ImGui::EndTooltip();
-                }
+                tracy::TooltipIfHovered( "Filters are active" );
                 if( showFilter )
                 {
                     ImGui::SameLine();
@@ -711,7 +857,7 @@ static void DrawContents()
             }
             if( showFilter )
             {
-                const auto w = ImGui::GetFontSize() * 12;
+                const auto w = ImGui::GetTextLineHeight() * 12;
                 ImGui::Separator();
                 addrFilter.Draw( "Address filter", w );
                 portFilter.Draw( "Port filter", w );
@@ -741,7 +887,7 @@ static void DrawContents()
                 if( portFilter.IsActive() )
                 {
                     char buf[32];
-                    sprintf( buf, "%" PRIu32, v.second.port );
+                    sprintf( buf, "%" PRIu16, v.second.port );
                     if( !portFilter.PassFilter( buf ) ) continue;
                 }
                 if( progFilter.IsActive() && !progFilter.PassFilter( v.second.procName.c_str() ) ) continue;
@@ -750,10 +896,10 @@ static void DrawContents()
                 ImGui::PushID( idx++ );
                 const bool selected = ImGui::Selectable( name->second.c_str(), &sel, flags );
                 ImGui::PopID();
-                if( ImGui::IsItemHovered() )
+                if( ImGui::IsItemHovered( ImGuiHoveredFlags_AllowWhenDisabled ) )
                 {
                     char portstr[32];
-                    sprintf( portstr, "%" PRIu32, v.second.port );
+                    sprintf( portstr, "%" PRIu16, v.second.port );
                     ImGui::BeginTooltip();
                     if( badProto )
                     {
@@ -768,11 +914,11 @@ static void DrawContents()
                 if( v.second.port != port )
                 {
                     ImGui::SameLine();
-                    ImGui::TextDisabled( ":%" PRIu32, v.second.port );
+                    ImGui::TextDisabled( ":%" PRIu16, v.second.port );
                 }
                 if( selected && !loadThread.joinable() )
                 {
-                    view = std::make_unique<tracy::View>( v.second.address.c_str(), v.second.port, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
+                    view = std::make_unique<tracy::View>( RunOnMainThread, v.second.address.c_str(), v.second.port, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative, SetupScaleCallback );
                 }
                 ImGui::NextColumn();
                 const auto acttime = ( v.second.activeTime + ( time - v.second.time ) / 1000 ) * 1000000000ll;
@@ -802,11 +948,38 @@ static void DrawContents()
                 ImGui::TextUnformatted( "All clients are filtered." );
             }
         }
-
         ImGui::End();
+
+        if( showReleaseNotes )
+        {
+            assert( updateNotesThread.joinable() );
+            ImGui::SetNextWindowSize( ImVec2( 600 * dpiScale, 400 * dpiScale ), ImGuiCond_FirstUseEver );
+            ImGui::Begin( "Update available!", &showReleaseNotes );
+            if( ImGui::Button( ICON_FA_DOWNLOAD " Download" ) )
+            {
+                tracy::OpenWebpage( "https://github.com/wolfpld/tracy/releases" );
+            }
+            ImGui::BeginChild( "###notes", ImVec2( 0, 0 ), true );
+            if( releaseNotes.empty() )
+            {
+                static float rnTime = 0;
+                rnTime += ImGui::GetIO().DeltaTime;
+                tracy::TextCentered( "Fetching release notes..." );
+                tracy::DrawWaitingDots( rnTime );
+            }
+            else
+            {
+                ImGui::PushFont( fixedWidth );
+                ImGui::TextUnformatted( releaseNotes.c_str() );
+                ImGui::PopFont();
+            }
+            ImGui::EndChild();
+            ImGui::End();
+        }
     }
     else
     {
+        if( showReleaseNotes ) showReleaseNotes = false;
         if( broadcastListen )
         {
             broadcastListen.reset();
@@ -837,7 +1010,9 @@ static void DrawContents()
     }
     if( ImGui::BeginPopupModal( "Loading trace...", nullptr, ImGuiWindowFlags_AlwaysAutoResize ) )
     {
+        ImGui::PushFont( bigFont );
         tracy::TextCentered( ICON_FA_HOURGLASS_HALF );
+        ImGui::PopFont();
 
         animTime += ImGui::GetIO().DeltaTime;
         tracy::DrawWaitingDots( animTime );
@@ -912,7 +1087,7 @@ static void DrawContents()
         viewShutdown.store( ViewShutdown::False, std::memory_order_relaxed );
         if( reconnect )
         {
-            view = std::make_unique<tracy::View>( reconnectAddr.c_str(), reconnectPort, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
+            view = std::make_unique<tracy::View>( RunOnMainThread, reconnectAddr.c_str(), reconnectPort, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative, SetupScaleCallback );
         }
         break;
     default:
@@ -921,10 +1096,12 @@ static void DrawContents()
     if( ImGui::BeginPopupModal( "Capture cleanup...", nullptr, ImGuiWindowFlags_AlwaysAutoResize ) )
     {
         if( viewShutdown.load( std::memory_order_relaxed ) != ViewShutdown::True ) ImGui::CloseCurrentPopup();
+        ImGui::PushFont( bigFont );
         tracy::TextCentered( ICON_FA_BROOM );
+        ImGui::PopFont();
         animTime += ImGui::GetIO().DeltaTime;
         tracy::DrawWaitingDots( animTime );
-        ImGui::Text( "Please wait, cleanup is in progress" );
+        ImGui::TextUnformatted( "Please wait, cleanup is in progress" );
         ImGui::EndPopup();
     }
 
