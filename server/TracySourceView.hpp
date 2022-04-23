@@ -144,7 +144,7 @@ public:
 
     SourceView( GetWindowCallback gwcb );
 
-    void UpdateFont( ImFont* fixed, ImFont* small ) { m_font = fixed; m_smallFont = small; }
+    void UpdateFont( ImFont* fixed, ImFont* _small ) { m_font = fixed; m_smallFont = _small; }
     void SetCpuId( uint32_t cpuid );
 
     void OpenSource( const char* fileName, int line, const View& view, const Worker& worker );

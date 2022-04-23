@@ -875,9 +875,9 @@ bool View::DrawImpl()
         }
         else
         {
-            ImGui::BeginDisabled();
+            ImGui::PushDisabled();
             ImGui::ButtonEx( MainWindowButtons[2], ImVec2( bw, 0 ) );
-            ImGui::EndDisabled();
+            ImGui::PopDisabled();
         }
         if( ImGui::BeginPopup( "viewMode" ) )
         {
@@ -1617,11 +1617,11 @@ bool View::DrawConnection()
     if( ImGui::Button( ICON_FA_SAVE " Save trace" ) && m_saveThreadState.load( std::memory_order_relaxed ) == SaveThreadState::Inert )
     {
 #ifndef TRACY_NO_FILESELECTOR
-        // nfdchar_t* fn;
-        // auto res = NFD_SaveDialog( "tracy", nullptr, &fn);
-        nfdu8filteritem_t filter = { "Tracy Profiler trace file", "tracy" };
-        nfdu8char_t* fn;
-        auto res = NFD_SaveDialogU8( &fn, &filter, 1, nullptr, nullptr );
+        nfdchar_t* fn;
+        auto res = NFD_SaveDialog( "tracy", nullptr, &fn);
+        // nfdu8filteritem_t filter = { "Tracy Profiler trace file", "tracy" };
+        // nfdu8char_t* fn;
+        // auto res = NFD_SaveDialogU8( &fn, &filter, 1, nullptr, nullptr );
         if( res == NFD_OKAY )
 #else
         const char* fn = "trace.tracy";
@@ -1638,9 +1638,9 @@ bool View::DrawConnection()
             {
                 m_filenameStaging = fn;
             }
-#ifndef TRACY_NO_FILESELECTOR
-            NFD_FreePathU8( fn );
-#endif
+// #ifndef TRACY_NO_FILESELECTOR
+//             NFD_FreePathU8( fn );
+// #endif
         }
     }
 
@@ -1657,9 +1657,9 @@ bool View::DrawConnection()
     }
     else
     {
-        ImGui::BeginDisabled();
+        ImGui::PushDisabled();
         ImGui::Button( stopStr );
-        ImGui::EndDisabled();
+        ImGui::PopDisabled();
     }
 
     ImGui::SameLine();
@@ -11787,11 +11787,11 @@ void View::DrawCompare()
         ImGui::TextWrapped( "Please load a second trace to compare results." );
         if( ImGui::Button( ICON_FA_FOLDER_OPEN " Open second trace" ) && !m_compare.loadThread.joinable() )
         {
-            // nfdchar_t* fn;
-            // auto res = NFD_OpenDialog( "tracy", nullptr, &fn);
-            nfdu8filteritem_t filter = { "Tracy Profiler trace file", "tracy" };
-            nfdu8char_t* fn;
-            auto res = NFD_OpenDialogU8( &fn, &filter, 1, nullptr );
+            nfdchar_t* fn;
+            auto res = NFD_OpenDialog( "tracy", nullptr, &fn);
+            // nfdu8filteritem_t filter = { "Tracy Profiler trace file", "tracy" };
+            // nfdu8char_t* fn;
+            // auto res = NFD_OpenDialogU8( &fn, &filter, 1, nullptr );
             if( res == NFD_OKAY )
             {
                 try
@@ -11822,7 +11822,7 @@ void View::DrawCompare()
                     m_compare.badVer.state = BadVersionState::ReadError;
                 }
             }
-            NFD_FreePathU8( fn );
+            // NFD_FreePathU8( fn );
         }
         tracy::BadVersion( m_compare.badVer, m_bigFont );
         ImGui::End();
@@ -12972,10 +12972,10 @@ void View::DrawStatistics()
         ImGui::SameLine();
         if( m_statRange.active )
         {
-            ImGui::BeginDisabled();
+            ImGui::PushDisabled();
             m_statAccumulationMode = AccumulationMode::SelfOnly;
             AccumulationModeComboBox();
-            ImGui::EndDisabled();
+            ImGui::PopDisabled();
         }
         else
         {

@@ -122,9 +122,9 @@ static const ImVec4 SyntaxColorsDimmed[] = {
 {
     if( disabled )
     {
-        ImGui::BeginDisabled();
+        ImGui::PushDisabled();
         ImGui::Button( label );
-        ImGui::EndDisabled();
+        ImGui::PopDisabled();
         return false;
     }
     else
@@ -137,9 +137,9 @@ static const ImVec4 SyntaxColorsDimmed[] = {
 {
     if( disabled )
     {
-        ImGui::BeginDisabled();
+        ImGui::PushDisabled();
         ImGui::SmallButton( label );
-        ImGui::EndDisabled();
+        ImGui::PopDisabled();
         return false;
     }
     else
